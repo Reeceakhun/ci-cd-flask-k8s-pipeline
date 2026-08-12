@@ -45,3 +45,23 @@ jobs:
           context: .
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/ci-cd-flask-k8s-pipeline:${{ github.sha }}
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      - name: Set image tag in manifest
+        run: |
+          sed -i "s|yourdockerhubuser/ci-cd-demo:latest|${{ secrets.DOCKERHUB_USERNAME }}/ci-cd-flask-k8s-pipeline:${{ github.sha }}|" k8s/deployment.yaml
+
+      - name: Deploy to kind
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/demo-app --timeout=60s
+
+      - name: Verify pods are running
+        run: kubectl get pods -o wide

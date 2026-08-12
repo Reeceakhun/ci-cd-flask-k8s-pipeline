@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: demo-app
-          image: reeceakhun/ci-cd-demo:latest
+          image: yourdockerhubuser/ci-cd-demo:latest
           ports:
             - containerPort: 5000
           resources:
