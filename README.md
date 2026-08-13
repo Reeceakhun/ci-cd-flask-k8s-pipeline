@@ -2,24 +2,25 @@
 
 CI/CD pipeline for a Flask app: GitHub Actions runs tests, builds a Docker image, and deploys to Kubernetes.
 
-> **Status: in progress.** Test stage is live in CI. Build/push and deploy stages are being added next — see [Roadmap](#roadmap).
-
 ## What this project demonstrates
 
-A small Flask API taken through a full CI/CD loop:
+A small Flask API taken through a full CI/CD loop, end to end:
 
 ```
 push to master
      │
      ▼
- run tests (pytest)  ─────┐
-     │                    │  [not yet added]
-     ▼                    ▼
- build Docker image   deploy to Kubernetes
+ test (pytest)
+     │  fails → pipeline stops here
+     ▼
+ build-and-push (Docker image, tagged with commit SHA, pushed to Docker Hub)
      │
      ▼
- push to registry
+ deploy (spins up an ephemeral kind cluster, deploys the just-built image,
+         waits for rollout to succeed, prints running pods)
 ```
+
+Every stage depends on the previous one succeeding (`needs:` in the workflow), so a broken test or a bad image never reaches deployment.
 
 ## Stack
 
@@ -43,7 +44,7 @@ ci-cd-flask-k8s-pipeline/
 │   ├── deployment.yaml    # 2 replicas, resource requests/limits, readiness/liveness probes
 │   └── service.yaml       # ClusterIP service on port 80 -> 5000
 └── .github/workflows/
-    └── deploy.yml          # CI: install deps + run pytest on every push/PR to master
+    └── deploy.yml          # 3-stage pipeline: test -> build-and-push -> deploy
 ```
 
 ## Running locally
@@ -81,21 +82,37 @@ kubectl get svc
 
 ## CI pipeline
 
-`.github/workflows/deploy.yml` currently runs on every push/PR to `master`:
-1. Checks out the repo
-2. Sets up Python 3.12
-3. Installs dependencies from `app/requirements.txt`
-4. Runs the pytest suite
+`.github/workflows/deploy.yml` runs on every push/PR to `master`, as three dependent jobs:
 
-Build, push-to-registry, and deploy-to-cluster stages are being added next (see Roadmap).
+**1. `test`** — runs on every push and PR
+- Checks out the repo
+- Sets up Python 3.12
+- Installs dependencies from `app/requirements.txt`
+- Runs the pytest suite
+
+**2. `build-and-push`** — runs only on pushes to `master` (not PRs), and only if `test` passes
+- Logs in to Docker Hub using repo secrets
+- Builds the image and pushes it tagged with the commit SHA (`ci-cd-flask-k8s-pipeline:<sha>`), not `latest` — every build is traceable back to the exact commit that produced it
+
+**3. `deploy`** — runs only if `build-and-push` succeeds
+- Spins up a throwaway `kind` (Kubernetes-in-Docker) cluster inside the runner
+- Swaps the image placeholder in `k8s/deployment.yaml` for the image just built
+- Applies the manifests and waits on `kubectl rollout status`, so the job actually fails if the pods don't come up healthy — not just if `kubectl apply` didn't error
+- Logs `kubectl get pods` as visible proof of a working deployment
+
+Because each job uses `needs:`, a failing test never reaches build, and a failed build never reaches deploy.
+
+## Design decisions
+
+- **Ephemeral `kind` cluster instead of a persistent cloud cluster** — this keeps the pipeline fully self-contained and free to run: anyone who forks this repo can run the whole thing without needing GCP/AWS credentials or a standing cluster. (See `reece-project` for a persistent GKE cluster provisioned with Terraform.)
+- **Commit-SHA image tags over `latest`** — makes every deployed image traceable to an exact commit, and avoids the classic "which version of `latest` is actually running" problem.
+- **`readiness`/`liveness` probes on `/health`** — readiness gates traffic to the pod, liveness controls restarts. Using the same endpoint for both here for simplicity; in a larger app these would typically check different things (e.g. liveness just checks the process is alive, readiness checks DB connectivity).
 
 ## Roadmap
 
-- [ ] Add Docker build + push stage to CI (push image to Docker Hub on `master`)
-- [ ] Add deploy stage to CI (apply `k8s/` manifests to a live cluster)
 - [ ] Add a Jenkinsfile as an alternate CI/CD implementation
 - [ ] Add architecture diagram
-- [ ] Live-test `k8s/` manifests against a running cluster (minikube or GKE)
+- [ ] Point `deploy` at a persistent cluster (e.g. the GKE cluster from `reece-project`) as an alternative to the ephemeral `kind` job
 
 ## Notes / issues hit along the way
 
@@ -107,3 +124,4 @@ Keeping this section honest rather than pretending it all worked first try — i
 - **`kubectl apply` failed with an OpenAPI validation connection error** → no local cluster (minikube) was running at the time; manifests were committed and will be validated against a live cluster later.
 - **`git push` failed with `Permission denied (publickey)`** → remote was set to the SSH URL with no SSH key configured; switched remote to HTTPS instead.
 - **Pushed to `main` but branch is `master`** → CI workflow trigger and push target both corrected to `master` to match the actual local branch.
+- **First CI run failed immediately with "job was not started because your account is locked due to a billing issue"** → account-level GitHub billing lock, unrelated to the workflow itself; resolved via GitHub billing settings.
