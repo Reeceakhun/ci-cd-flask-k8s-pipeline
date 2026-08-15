@@ -65,3 +65,12 @@ jobs:
 
       - name: Verify pods are running
         run: kubectl get pods -o wide
+      
+
+      - name: Trigger ephemeral AKS environment
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.INFRA_REPO_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Reeceakhun/aks-ephemeral-infra/dispatches \
+            -d '{"event_type":"provision-env","client_payload":{"image_tag":"${{ secrets.DOCKERHUB_USERNAME }}/ci-cd-flask-k8s-pipeline:${{ github.sha }}"}}'
