@@ -102,6 +102,20 @@ kubectl get svc
 
 Because each job uses `needs:`, a failing test never reaches build, and a failed build never reaches deploy.
 
+## Triggering an ephemeral AKS environment
+
+After a successful deploy, the pipeline fires a `repository_dispatch` event
+at [`aks-ephemeral-infra`](https://github.com/Reeceakhun/aks-ephemeral-infra) —
+a separate repo that owns the full lifecycle of short-lived Azure
+environments. That repo provisions a tagged AKS cluster, deploys the image
+just built here, and automatically tears it down ~20 minutes later via a
+scheduled reaper — independent of whether this pipeline (or anything else)
+is still running.
+
+This repo doesn't manage any Azure infrastructure directly; it only asks for
+an environment and moves on. See `aks-ephemeral-infra`'s README for the full
+architecture, tagging convention, and OIDC setup.
+
 ## Design decisions
 
 - **Ephemeral `kind` cluster instead of a persistent cloud cluster** — this keeps the pipeline fully self-contained and free to run: anyone who forks this repo can run the whole thing without needing GCP/AWS credentials or a standing cluster. (See `reece-project` for a persistent GKE cluster provisioned with Terraform.)
@@ -125,3 +139,5 @@ Keeping this section honest rather than pretending it all worked first try — i
 - **`git push` failed with `Permission denied (publickey)`** → remote was set to the SSH URL with no SSH key configured; switched remote to HTTPS instead.
 - **Pushed to `main` but branch is `master`** → CI workflow trigger and push target both corrected to `master` to match the actual local branch.
 - **First CI run failed immediately with "job was not started because your account is locked due to a billing issue"** → account-level GitHub billing lock, unrelated to the workflow itself; resolved via GitHub billing settings.
+- **Cross-repo trigger silently "succeeded" despite a failed API call** — the original `curl` command had no `-f` flag, so a `403` from GitHub's API still showed as a green step. Fixed by adding `-f` (fail on HTTP errors) and printing the response status, which surfaced the real error immediately.
+- **`403: Resource not accessible by personal access token`** when firing the `repository_dispatch` event → the fine-grained PAT was missing `Contents: Read and write` — this endpoint requires that permission, not just `Actions`, which isn't obvious from the API's name. Fixed by updating the token's scopes.
